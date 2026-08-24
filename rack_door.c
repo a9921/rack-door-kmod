@@ -15,15 +15,8 @@ MODULE_VERSION("0.2");
 #define CLASS_NAME "rack1"
 #define DOOR_GPIO 17
 
-static struct gpio_device *gdev
-{
-  /* data */
-};
-
-static struct gpio_desc *door_desc
-{
-  /* data */
-};
+static struct gpio_device *gdev;
+static struct gpio_desc *door_desc;
 
 
 
@@ -31,6 +24,9 @@ static struct gpio_desc *door_desc
 static int __init door_init(void)
 {
   pr_info("door_init insmod\n");
+  
+  int ret = gpiod_direction_input(door_desc);
+  int val = gpiod_get_value(door_desc);
 
   gdev = gpio_device_find_by_label(GPIO_CHIP_LABEL);
   if(!gdev)
@@ -42,20 +38,18 @@ static int __init door_init(void)
   door_desc = gpio_device_get_desc(gdev, DOOR_GPIO);
   if(IS_ERR(door_desc))
   {
-    pr_err("%c找不到\n",DOOR_GPIO);
+    pr_err("%d找不到\n",DOOR_GPIO);
     gpio_device_put(gdev);
     return PTR_ERR(door_desc);
   }
 
-  int ret = gpiod_direction_input(door_desc);
   if(ret)
   {
-    pr_err("GPIO設成輸出失敗\n");
+    pr_err("GPIO設成輸入失敗\n");
     gpio_device_put(gdev);
     return ret;
   }
 
-  int val = gpiod_get_value(door_desc);
   if(val < 0)
   {
     pr_err("電位讀取失敗\n");
@@ -63,8 +57,7 @@ static int __init door_init(void)
     return val;
   }
 
-  pr_info("gdev: %c； GPIO: %c； ret: %d； val: %d；", gdev, door_desc, ret, val);
-
+  pr_info("讀取GPIO: %u, val為: %d \n", door_desc, val);
   return 0;
 }
 
