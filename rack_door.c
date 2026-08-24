@@ -1,0 +1,78 @@
+#include <linux/init.h>
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/gpio/consumer.h>
+#include <linux/gpio/driver.h>
+#include <linux/err.h>
+
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("YUE");
+MODULE_DESCRIPTION("Rack door reed switch monitor (GPIO IRQ + debounce + chardev)");
+MODULE_VERSION("0.2");
+
+#define GPIO_CHIP_LABEL "pinctrl-rp1"
+#define DEV_NAME "rack_door1"
+#define CLASS_NAME "rack1"
+#define DOOR_GPIO 17
+
+static struct gpio_device *gdev
+{
+  /* data */
+};
+
+static struct gpio_desc *door_desc
+{
+  /* data */
+};
+
+
+
+
+static int __init door_init(void)
+{
+  pr_info("door_init insmod\n");
+
+  gdev = gpio_device_find_by_label(GPIO_CHIP_LABEL);
+  if(!gdev)
+  {
+    pr_err("GPIO控制器(rp1)找不到\n");
+    return -ENODEV;
+  }
+
+  door_desc = gpio_device_get_desc(gdev, DOOR_GPIO);
+  if(IS_ERR(door_desc))
+  {
+    pr_err("%c找不到\n",DOOR_GPIO);
+    gpio_device_put(gdev);
+    return PTR_ERR(door_desc);
+  }
+
+  int ret = gpiod_direction_input(door_desc);
+  if(ret)
+  {
+    pr_err("GPIO設成輸出失敗\n");
+    gpio_device_put(gdev);
+    return ret;
+  }
+
+  int val = gpiod_get_value(door_desc);
+  if(val < 0)
+  {
+    pr_err("電位讀取失敗\n");
+    gpio_device_put(gdev);
+    return val;
+  }
+
+  pr_info("gdev: %c； GPIO: %c； ret: %d； val: %d；", gdev, door_desc, ret, val);
+
+  return 0;
+}
+
+static void __exit door_exit(void)
+{
+  gpio_device_put(gdev);
+  pr_info("door_exit rmmod\n");
+}
+
+module_init(door_init);
+module_exit(door_exit);
