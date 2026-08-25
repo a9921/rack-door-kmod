@@ -26,9 +26,8 @@ static irqreturn_t door_isr(int irq, void *dev_id)
   val = gpiod_get_value(door_desc);
   if(val < 0)
   {
-    pr_err("rack: 電位讀取失敗\n");
-    gpio_device_put(gdev);
-    return val;
+    pr_warn("rack: 電位讀取失敗\n");
+    return IRQ_HANDLED;
   }
   pr_info("rack: 讀取GPIO: %d, val為:%d %s\n", DOOR_GPIO, val, val?"門開":"門關");
   
@@ -38,9 +37,11 @@ static irqreturn_t door_isr(int irq, void *dev_id)
 
 static int __init door_init(void)
 {
-  pr_info("rack: door_init insmod\n");
-  
   int ret;
+  int req;
+  int val;
+
+  pr_info("rack: door_init insmod\n");
   
   gdev = gpio_device_find_by_label(GPIO_CHIP_LABEL);
   if(!gdev)
@@ -64,13 +65,38 @@ static int __init door_init(void)
     gpio_device_put(gdev);
     return ret;
   }
-  
+
+  door_irq = gpiod_to_irq(door_desc);
+  if(door_irq < 0)
+  {
+    pr_err("rack: 中斷號碼設置失敗\n");
+    gpio_device_put(gdev);
+    return door_irq;
+  }
+
+  req = request_irq(door_irq, door_isr, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, DEV_NAME, NULL);
+  if(req)
+  {
+    pr_err("rack: 註冊中斷函式失敗\n");
+    gpio_device_put(gdev);
+    return req;
+  }
+
+  val = gpiod_get_value(door_desc);
+  if(val < 0 )
+  {
+    pr_info("rack: 讀取GPIO: %d, val為:%d %s\n", DOOR_GPIO, val, val?"門開":"門關");
+  }
 
   return 0;
 }
 
 static void __exit door_exit(void)
 {
+  if(door_irq >= 0)
+  {
+    free_irq(door_irq, NULL);
+  }
   gpio_device_put(gdev);
   pr_info("rack: door_exit rmmod\n");
 }
