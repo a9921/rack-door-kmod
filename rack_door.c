@@ -10,29 +10,35 @@
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("YUE");
 MODULE_DESCRIPTION("Rack door reed switch monitor (GPIO IRQ + debounce + chardev)");
-MODULE_VERSION("0.4");
+MODULE_VERSION("0.5");
 
 #define GPIO_CHIP_LABEL "pinctrl-rp1"
 #define DEV_NAME "rack_door1"
 #define CLASS_NAME "rack1"
-#define DOOR_GPIO 17
+static unsigned int door_gpio = 17;
+module_param(door_gpio, uint, 0444);
+MODULE_PARM_DESC(door_gpio, "rack_door的輸入針腳號");
 
 static struct gpio_device *gdev;
 static struct gpio_desc *door_desc;
 static unsigned int debounce_ms = 50;
+module_param(debounce_ms, uint, 0644);
+MODULE_PARM_DESC(debounce_ms, "彈跳的基礎常數");
 static ktime_t last_irq;
 static ktime_t last_change;
 static int door_state = -1;   //-1未知,0關,1開
 static unsigned long event_count;
 static unsigned long bounce_count;
+static unsigned long err_count;
+static unsigned long irq_count;
 
 static int door_irq = -1;
 static irqreturn_t door_isr(int irq, void *dev_id)
 {
   int val;
-  
   ktime_t now = ktime_get();
   s64 delta_ms = ktime_ms_delta(now, last_irq);
+  irq_count++;
   
   if(delta_ms < (s64)debounce_ms)   //如果變換時間(s64)小於(32)正常人類手速，視為彈跳
   {
@@ -45,6 +51,7 @@ static irqreturn_t door_isr(int irq, void *dev_id)
   if(val < 0)
   {
     pr_warn("rack: 電位讀取失敗\n");
+    err_count++;
     return IRQ_HANDLED;
   }
 
@@ -54,10 +61,10 @@ static irqreturn_t door_isr(int irq, void *dev_id)
     return IRQ_HANDLED;
   }
   
-  pr_info("rack: 讀取GPIO: %d； 狀態%d %s； 上個狀態維持%lld； 事件數: %lu； 彈跳數: %lu\n", DOOR_GPIO, val, val?"門開":"門關", ktime_ms_delta(now, last_change), event_count, bounce_count);
+  event_count++;
+  pr_info("rack: 讀取GPIO: %u； 狀態%d %s； 上個狀態維持%lld ms； 事件數: %lu； 彈跳數: %lu\n", door_gpio, val, val?"門開":"門關", ktime_ms_delta(now, last_change), event_count, bounce_count);
   door_state = val;
   last_change = now;
-  event_count++;
 
   return IRQ_HANDLED;
 }
@@ -78,10 +85,10 @@ static int __init door_init(void)
     return -ENODEV;
   }
   
-  door_desc = gpio_device_get_desc(gdev, DOOR_GPIO);
+  door_desc = gpio_device_get_desc(gdev, door_gpio);
   if(IS_ERR(door_desc))
   {
-    pr_err("rack: %d找不到\n",DOOR_GPIO);
+    pr_err("rack: %u找不到\n",door_gpio);
     gpio_device_put(gdev);
     return PTR_ERR(door_desc);
   }
@@ -122,7 +129,7 @@ static int __init door_init(void)
     return req;
   }
 
-  pr_info("rack: 讀取GPIO: %d, val為:%d %s, irq: %d\n", DOOR_GPIO, val, val?"門開":"門關", door_irq);
+  pr_info("rack: 讀取GPIO: %u, val為:%d %s, irq: %d\n", door_gpio, val, val?"門開":"門關", door_irq);
   return 0;
 }
 
@@ -133,7 +140,11 @@ static void __exit door_exit(void)
     free_irq(door_irq, NULL);
   }
   gpio_device_put(gdev);
-  pr_info("rack: door_exit rmmod\n");
+    pr_info("rack: door_exit rmmod； debounce=%u ms； 總中斷 %lu = 事件 %lu + 彈跳 %lu + 讀取失敗 %lu； 差值 %ld\n",
+          debounce_ms,
+          irq_count,
+          event_count, bounce_count, err_count,
+          (long)irq_count - (long)event_count - (long)bounce_count - (long)err_count);
 }
 
 module_init(door_init);
