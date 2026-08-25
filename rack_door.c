@@ -10,7 +10,7 @@
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("YUE");
 MODULE_DESCRIPTION("Rack door reed switch monitor (GPIO IRQ + debounce + chardev)");
-MODULE_VERSION("0.5");
+MODULE_VERSION("0.6");
 
 #define GPIO_CHIP_LABEL "pinctrl-rp1"
 #define DEV_NAME "rack_door1"
@@ -73,7 +73,6 @@ static irqreturn_t door_isr(int irq, void *dev_id)
 static int __init door_init(void)
 {
   int ret;
-  int req;
   int val;
 
   pr_info("rack: door_init insmod\n");
@@ -89,16 +88,15 @@ static int __init door_init(void)
   if(IS_ERR(door_desc))
   {
     pr_err("rack: %u找不到\n",door_gpio);
-    gpio_device_put(gdev);
-    return PTR_ERR(door_desc);
+    ret = PTR_ERR(door_desc);
+    goto err_put;
   }
   
   ret = gpiod_direction_input(door_desc);
   if(ret)
   {
     pr_err("rack: GPIO設成輸入失敗\n");
-    gpio_device_put(gdev);
-    return ret;
+    goto err_put;
   }
   
   val = gpiod_get_value(door_desc);
@@ -117,20 +115,23 @@ static int __init door_init(void)
   if(door_irq < 0)
   {
     pr_err("rack: 中斷號碼設置失敗\n");
-    gpio_device_put(gdev);
-    return door_irq;
+    ret = door_irq;
+    goto err_put;
   }
 
-  req = request_irq(door_irq, door_isr, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, DEV_NAME, NULL);
-  if(req)
+  ret = request_irq(door_irq, door_isr, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, DEV_NAME, NULL);
+  if(ret)
   {
     pr_err("rack: 註冊中斷函式失敗\n");
-    gpio_device_put(gdev);
-    return req;
+    goto err_put;
   }
-
+  
   pr_info("rack: 讀取GPIO: %u, val為:%d %s, irq: %d\n", door_gpio, val, val?"門開":"門關", door_irq);
   return 0;
+
+err_put:
+  gpio_device_put(gdev);
+  return ret;
 }
 
 static void __exit door_exit(void)
@@ -140,11 +141,11 @@ static void __exit door_exit(void)
     free_irq(door_irq, NULL);
   }
   gpio_device_put(gdev);
-    pr_info("rack: door_exit rmmod； debounce=%u ms； 總中斷 %lu = 事件 %lu + 彈跳 %lu + 讀取失敗 %lu； 差值 %ld\n",
-          debounce_ms,
-          irq_count,
-          event_count, bounce_count, err_count,
-          (long)irq_count - (long)event_count - (long)bounce_count - (long)err_count);
+  pr_info("rack: door_exit rmmod； debounce=%u ms； 總中斷 %lu = 事件 %lu + 彈跳 %lu + 讀取失敗 %lu； 差值 %ld\n",
+        debounce_ms,
+        irq_count,
+        event_count, bounce_count, err_count,
+        (long)irq_count - (long)event_count - (long)bounce_count - (long)err_count);
 }
 
 module_init(door_init);
