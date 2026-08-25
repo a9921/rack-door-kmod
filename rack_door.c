@@ -9,7 +9,7 @@
 #include <linux/fs.h>
 #include <linux/cdev.h>
 #include <linux/device.h>
-#include <linux/uacce.h>
+#include <linux/uaccess.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("YUE");
@@ -73,7 +73,7 @@ static irqreturn_t door_isr(int irq, void *dev_id)
     err_count++;
     return IRQ_HANDLED;
   }
-
+  
   if(val == door_state)
   {
     bounce_count++;
@@ -84,7 +84,7 @@ static irqreturn_t door_isr(int irq, void *dev_id)
   pr_info("rack: 讀取GPIO: %u； 狀態%d %s； 上個狀態維持%lld ms； 事件數: %lu； 彈跳數: %lu\n", door_gpio, val, val?"門開":"門關", ktime_ms_delta(now, last_change), event_count, bounce_count);
   door_state = val;
   last_change = now;
-
+  
   return IRQ_HANDLED;
 }
 
@@ -93,6 +93,8 @@ static int __init door_init(void)
 {
   int ret;
   int val;
+  int major;
+  int minor;
 
   pr_info("rack: door_init insmod\n");
   
@@ -145,12 +147,52 @@ static int __init door_init(void)
     goto err_put;
   }
 
+  ret = alloc_chrdev_region(&dev_num, 0, 1, DEV_NAME);
+  if(ret < 0)
+  {
+    pr_err("rack: 字元裝置建制失敗(%d)\n", ret);
+    goto err_irq;
+  }
   
+  cdev_init(&door_cdev, &door_fops);
+  door_cdev.owner = THIS_MODULE;
 
+  ret = cdev_add(&door_cdev, dev_num, 1);
+  if(ret < 0)
+  {
+    pr_err("rack: 字元裝置加入失敗\n");
+    goto err_region;
+  }
+
+  door_class = class_create(CLASS_NAME);
+  if(IS_ERR(door_class))
+  {
+    pr_err("rack: 裝置類別建制失敗\n");
+    ret = PTR_ERR(door_class);
+    goto err_cdev;
+  }
+
+  door_device = device_create(door_class, NULL, dev_num, NULL, DEV_NAME);
+  if(IS_ERR(door_device))
+  {
+    pr_err("rack: 裝置節點建立失敗\n");
+    ret = PTR_ERR(door_device);
+    goto err_class;
+  }  
   
-  pr_info("rack: 讀取GPIO: %u, val為:%d %s, irq: %d\n", door_gpio, val, val?"門開":"門關", door_irq);
+  major = MAJOR(dev_num);
+  minor = MINOR(dev_num);
+  pr_info("rack: 讀取GPIO: %u, val為:%d %s, irq: %d, major:%d, minor:%d\n", door_gpio, val, val?"門開":"門關", door_irq, major, minor);
   return 0;
 
+err_class:
+  class_destroy(door_class);
+err_cdev: 
+  cdev_del(&door_cdev);
+err_region:
+  unregister_chrdev_region(dev_num, 1);
+err_irq:
+  free_irq(door_irq, NULL);
 err_put:
   gpio_device_put(gdev);
   return ret;
@@ -158,11 +200,18 @@ err_put:
 
 static void __exit door_exit(void)
 {
+  device_destroy(door_class, dev_num);
+  class_destroy(door_class);
+  cdev_del(&door_cdev);
+  unregister_chrdev_region(dev_num, 1);
+
   if(door_irq >= 0)
   {
     free_irq(door_irq, NULL);
   }
   gpio_device_put(gdev);
+
+
   pr_info("rack: door_exit rmmod； debounce=%u ms； 總中斷 %lu = 事件 %lu + 彈跳 %lu + 讀取失敗 %lu； 差值 %ld\n",
         debounce_ms,
         irq_count,
