@@ -6,11 +6,15 @@
 #include <linux/err.h>
 #include <linux/interrupt.h>
 #include <linux/ktime.h>
+#include <linux/fs.h>
+#include <linux/cdev.h>
+#include <linux/device.h>
+#include <linux/uacce.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("YUE");
 MODULE_DESCRIPTION("Rack door reed switch monitor (GPIO IRQ + debounce + chardev)");
-MODULE_VERSION("0.6");
+MODULE_VERSION("0.7");
 
 #define GPIO_CHIP_LABEL "pinctrl-rp1"
 #define DEV_NAME "rack_door1"
@@ -31,6 +35,21 @@ static unsigned long event_count;
 static unsigned long bounce_count;
 static unsigned long err_count;
 static unsigned long irq_count;
+
+static dev_t dev_num;
+static struct cdev door_cdev;
+static struct class *door_class;
+static struct device *door_device;
+
+static ssize_t door_read(struct file *filp, char __user *buf, size_t len, loff_t *off)
+{
+  return 0;
+}
+
+static const struct file_operations door_fops = {
+  .owner = THIS_MODULE,
+  .read = door_read
+};
 
 static int door_irq = -1;
 static irqreturn_t door_isr(int irq, void *dev_id)
@@ -125,6 +144,9 @@ static int __init door_init(void)
     pr_err("rack: 註冊中斷函式失敗\n");
     goto err_put;
   }
+
+  
+
   
   pr_info("rack: 讀取GPIO: %u, val為:%d %s, irq: %d\n", door_gpio, val, val?"門開":"門關", door_irq);
   return 0;
