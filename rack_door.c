@@ -14,11 +14,13 @@
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("YUE");
 MODULE_DESCRIPTION("Rack door reed switch monitor (GPIO IRQ + debounce + chardev)");
-MODULE_VERSION("0.7");
+MODULE_VERSION("0.8");
 
 #define GPIO_CHIP_LABEL "pinctrl-rp1"
 #define DEV_NAME "rack_door1"
 #define CLASS_NAME "rack1"
+#define TMP_LEN 192
+
 static unsigned int door_gpio = 17;
 module_param(door_gpio, uint, 0444);
 MODULE_PARM_DESC(door_gpio, "rack_door的輸入針腳號");
@@ -40,16 +42,6 @@ static dev_t dev_num;
 static struct cdev door_cdev;
 static struct class *door_class;
 static struct device *door_device;
-
-static ssize_t door_read(struct file *filp, char __user *buf, size_t len, loff_t *off)
-{
-  return 0;
-}
-
-static const struct file_operations door_fops = {
-  .owner = THIS_MODULE,
-  .read = door_read
-};
 
 static int door_irq = -1;
 static irqreturn_t door_isr(int irq, void *dev_id)
@@ -88,6 +80,35 @@ static irqreturn_t door_isr(int irq, void *dev_id)
   return IRQ_HANDLED;
 }
 
+static ssize_t door_read(struct file *filp, char __user *buf, size_t len, loff_t *off)
+{
+  int n;
+  char tmp[TMP_LEN];
+
+  if(*off > 0)  //*off(位置))目前讀到第n個位元組
+  {
+    return 0;
+  }
+  
+  n = scnprintf(tmp, sizeof(tmp), "{\"door_state\": \"%s\", \"door_state_num\": %d, \"event_count\": %lu, \"bounce_count\": %lu, \"since_ms\": %lld}\n", door_state?"open":"closed", door_state, event_count, bounce_count, ktime_ms_delta(ktime_get(), last_change));
+  if(len < (size_t)n)
+  {
+    return -EINVAL;
+  }
+  
+  if(copy_to_user(buf, tmp, n))
+  {
+    return -EFAULT;
+  }
+  
+  *off = n;
+  return n;
+}
+
+static const struct file_operations door_fops = {
+  .owner = THIS_MODULE,
+  .read = door_read
+};
 
 static int __init door_init(void)
 {
