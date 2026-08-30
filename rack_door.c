@@ -11,11 +11,15 @@
 #include <linux/device.h>
 #include <linux/uaccess.h>
 #include <linux/workqueue.h>
+#include <linux/poll.h>
+
+#include <linux/slab.h>
+#include <linux/wait.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("YUE");
 MODULE_DESCRIPTION("Rack door reed switch monitor (GPIO IRQ + debounce + chardev)");
-MODULE_VERSION("0.9");
+MODULE_VERSION("1.0");
 
 #define GPIO_CHIP_LABEL "pinctrl-rp1"
 #define DEV_NAME "rack_door1"
@@ -48,13 +52,22 @@ static int door_irq = -1;
 static struct delayed_work door_work;
 static unsigned long work_count;
 
+static wait_queue_head_t door_wq;
+static atomic_t door_gen = ATOMIC_INIT(0);
+
+struct door_ctx
+{
+  int last_gen;
+};
+
+
 static void door_work_fn(struct work_struct *w)
 {
   int val;
   ktime_t now = ktime_get();
   
   work_count++;
-  
+
   val = gpiod_get_value(door_desc);
   if(val < 0)
   {
@@ -73,7 +86,11 @@ static void door_work_fn(struct work_struct *w)
   pr_info("rack: 讀取GPIO: %u; 狀態%d %s; 上個狀態維持%lld ms; 事件數: %lu; 彈跳數: %lu\n", door_gpio, val, val?"門開":"門關", ktime_ms_delta(now,  last_change), event_count, bounce_count);
   door_state = val;
   last_change = now;
+
+  atomic_inc(&door_gen);
+  wake_up_interruptible(&door_wq);
 }
+
 static irqreturn_t door_isr(int irq, void *dev_id)
 {
   irq_count++;
@@ -81,10 +98,46 @@ static irqreturn_t door_isr(int irq, void *dev_id)
   return IRQ_HANDLED;
 }
 
+static int door_open(struct inode *inode, struct file *filp)
+{
+ struct door_ctx *ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
+ 
+ if(!ctx)
+ {
+  return -ENOMEM;
+ }
+  
+ ctx->last_gen = atomic_read(&door_gen);
+ filp->private_data = ctx;
+ return 0;
+}
+
+static int door_release(struct inode *inode, struct file *filp)
+{
+  kfree(filp->private_data);
+  return 0;
+}
+
+static __poll_t door_poll(struct file *filp, struct poll_table_struct *wait)
+{
+  struct door_ctx *ctx = filp->private_data;
+  __poll_t mask = 0;
+
+  poll_wait(filp, &door_wq, wait);
+
+  if(atomic_read(&door_gen) != ctx->last_gen)
+  {
+    mask |= EPOLLIN | EPOLLRDNORM;
+  }
+  return mask;
+}
+
 static ssize_t door_read(struct file *filp, char __user *buf, size_t len, loff_t *off)
 {
   int n;
   char tmp[TMP_LEN];
+  struct door_ctx *ctx = filp->private_data;
+  int gen = atomic_read(&door_gen);
 
   if(*off > 0)  //*off(位置))目前讀到第n個位元組
   {
@@ -103,12 +156,17 @@ static ssize_t door_read(struct file *filp, char __user *buf, size_t len, loff_t
   }
   
   *off = n;
+  ctx->last_gen = gen;
+
   return n;
 }
 
 static const struct file_operations door_fops = {
   .owner = THIS_MODULE,
-  .read = door_read
+  .read = door_read,
+  .open = door_open,
+  .release = door_release,
+  .poll = door_poll
 };
 
 static int __init door_init(void)
@@ -162,6 +220,7 @@ static int __init door_init(void)
     goto err_put;
   }
 
+  init_waitqueue_head(&door_wq);
   INIT_DELAYED_WORK(&door_work, door_work_fn);
 
   ret = request_irq(door_irq, door_isr, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, DEV_NAME, NULL);
