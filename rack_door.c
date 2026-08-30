@@ -167,6 +167,7 @@ static const struct file_operations door_fops = {
   .open = door_open,
   .release = door_release,
   .poll = door_poll
+  .llseek = default_llseek
 };
 
 static int __init door_init(void)
