@@ -15,6 +15,7 @@
 
 #include <linux/slab.h>
 #include <linux/wait.h>
+#include <linux/atomic.h> 
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("YUE");
@@ -139,7 +140,7 @@ static ssize_t door_read(struct file *filp, char __user *buf, size_t len, loff_t
   struct door_ctx *ctx = filp->private_data;
   int gen = atomic_read(&door_gen);
 
-  if(*off > 0)  //*off(位置))目前讀到第n個位元組
+  if(*off > 0 && ctx->last_gen == gen)  //*off(位置))目前讀到第n個位元組
   {
     return 0;
   }
